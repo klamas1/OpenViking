@@ -1,10 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""User dot-files in ``viking://resources`` are listed and indexed like any file.
+"""User dot-files in resource trees are listed and indexed like any file.
 
-Only OpenViking metadata (``.abstract.md``, ``.overview.md``, ...) and
-storage-layer internal files stay hidden there. Other scopes keep hiding every
-dot-file because they store their own dot-named metadata.
+Resource trees are ``viking://resources``, ``viking://user/{id}/resources`` and
+``viking://user/{id}/peers/{peer}/resources``. Only OpenViking metadata
+(``.abstract.md``, ``.overview.md``, ...) and storage-layer internal files stay
+hidden there. Other namespaces keep hiding every dot-file because they store
+their own dot-named metadata.
 """
 
 from __future__ import annotations
@@ -92,21 +94,36 @@ def _dir_entries() -> list[dict]:
 # ── is_hidden_entry_name ──
 
 
+RESOURCE_TREES = (
+    "viking://resources",
+    "viking://user/alice/resources",
+    "viking://user/alice/peers/web-visitor/resources",
+)
+
+
+@pytest.mark.parametrize("root", RESOURCE_TREES)
 @pytest.mark.parametrize("name", USER_DOTFILES + (".helm",))
-def test_user_dotfiles_are_visible_in_resources(name):
-    assert not is_hidden_entry_name(name, f"viking://resources/repo/{name}")
-    assert not is_hidden_entry_name(name, "viking://resources/repo")
+def test_user_dotfiles_are_visible_in_resource_trees(root, name):
+    assert not is_hidden_entry_name(name, f"{root}/repo/{name}")
+    assert not is_hidden_entry_name(name, f"{root}/repo")
+    assert not is_hidden_entry_name(name, root)
 
 
 @pytest.mark.parametrize("name", METADATA_DOTFILES + (".watch_tasks.json.tmp",))
 def test_metadata_dotfiles_stay_hidden_in_resources(name):
-    assert is_hidden_entry_name(name, f"viking://resources/repo/{name}")
+    for root in RESOURCE_TREES:
+        assert is_hidden_entry_name(name, f"{root}/repo/{name}")
 
 
 @pytest.mark.parametrize(
     "uri",
     [
-        "viking://user/default/memories/.gitlab-ci.yml",
+        "viking://user/alice/memories/.gitlab-ci.yml",
+        "viking://user/alice/privacy/skill/demo/.gitlab-ci.yml",
+        "viking://user/alice/sessions/s1/.gitlab-ci.yml",
+        "viking://user/alice/peers/web-visitor/memories/.gitlab-ci.yml",
+        "viking://user/alice/.gitlab-ci.yml",
+        "viking://user/alice/skills/demo/.gitlab-ci.yml",
         "viking://agent/skills/demo/.gitlab-ci.yml",
         "viking://session/s1/.gitlab-ci.yml",
         "viking://temp/import/.gitlab-ci.yml",
@@ -128,7 +145,15 @@ def test_regular_names_are_never_hidden():
         ("viking://", True),
         ("viking://resources", True),
         ("viking://resources/repo", True),
-        ("viking://user/default", False),
+        ("viking://user", True),
+        ("viking://user/alice", True),
+        ("viking://user/alice/resources/repo", True),
+        ("viking://user/alice/peers", True),
+        ("viking://user/alice/peers/web-visitor", True),
+        ("viking://user/alice/peers/web-visitor/resources", True),
+        ("viking://user/alice/memories", False),
+        ("viking://user/alice/peers/web-visitor/memories", False),
+        ("viking://user/alice/privacy", False),
         ("viking://agent", False),
     ],
 )
@@ -190,6 +215,21 @@ async def test_ls_show_all_hidden_still_lists_metadata(monkeypatch, fs):
     result = await fs.ls("viking://resources/repo", show_all_hidden=True, ctx=_default_ctx())
 
     assert {entry["name"] for entry in result} == {"app.py", ".abstract.md", ".gitlab-ci.yml"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "uri", ["viking://user/alice/resources/repo", "viking://user/alice/peers/bot/resources/repo"]
+)
+async def test_ls_user_and_peer_resources_list_user_dotfiles(monkeypatch, fs, uri):
+    async def fake_ls_entries(_path, **_kwargs):
+        return _dir_entries()
+
+    monkeypatch.setattr(fs, "_ls_entries", fake_ls_entries)
+
+    result = await fs.ls(uri, ctx=_default_ctx())
+
+    assert sorted(entry["name"] for entry in result) == sorted([".helm", "app.py", *USER_DOTFILES])
 
 
 @pytest.mark.asyncio
@@ -276,6 +316,32 @@ async def test_tree_from_account_root_hides_dotfiles_outside_resources(monkeypat
         "viking://resources",
         "viking://resources/.gitlab-ci.yml",
         "viking://user",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tree_from_user_root_shows_dotfiles_only_in_resource_trees(monkeypatch, fs):
+    async def fake_tree_directory(path, **kwargs):
+        assert kwargs.get("show_hidden") is True
+        return [
+            _tree_entry(path, "memories", is_dir=True),
+            _tree_entry(f"{path}/memories", ".gitlab-ci.yml"),
+            _tree_entry(path, "privacy", is_dir=True),
+            _tree_entry(f"{path}/privacy", ".meta.json"),
+            _tree_entry(path, "resources", is_dir=True),
+            _tree_entry(f"{path}/resources", ".gitlab-ci.yml"),
+            _tree_entry(f"{path}/resources", ".overview.md"),
+        ]
+
+    monkeypatch.setattr(fs._async_agfs, "tree_directory", fake_tree_directory)
+
+    result = await fs.tree("viking://user/alice", ctx=_default_ctx())
+
+    assert [entry["uri"] for entry in result] == [
+        "viking://user/alice/memories",
+        "viking://user/alice/privacy",
+        "viking://user/alice/resources",
+        "viking://user/alice/resources/.gitlab-ci.yml",
     ]
 
 
