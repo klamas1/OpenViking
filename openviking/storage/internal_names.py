@@ -43,3 +43,55 @@ WEBDAV_RESERVED_FILENAMES = frozenset(
         *MULTIWRITE_INTERNAL_FILE_NAMES,
     }
 )
+
+# Dot-files OpenViking itself keeps inside ``viking://resources``. User files
+# with the same names are shadowed, so the set stays limited to real metadata.
+RESOURCE_METADATA_FILENAMES = frozenset(
+    {
+        ".abstract.md",
+        ".overview.md",
+        ".relations.json",
+        ".artifact_manifest.json",
+        ".image_mappings.json",
+        ".source.json",
+        ".git_source_repo",
+        ".watch_tasks.json",
+        ".watch_tasks.json.bak",
+        ".watch_tasks.json.tmp",
+    }
+)
+
+_USER_DOTFILE_SCOPES = frozenset({"resources"})
+
+
+def _uri_scope(uri: str) -> str:
+    rest = uri.removeprefix("viking://").lstrip("/")
+    return rest.split("/", 1)[0]
+
+
+def may_list_user_dotfiles(uri: str) -> bool:
+    """Return whether a listing rooted at ``uri`` can reach user dot-files.
+
+    Callers use it to ask the storage backend for hidden entries and then filter
+    them with :func:`is_hidden_entry_name`. The account root qualifies because
+    it contains ``resources``.
+    """
+    scope = _uri_scope(uri)
+    return not scope or scope in _USER_DOTFILE_SCOPES
+
+
+def is_hidden_entry_name(name: str, uri: str) -> bool:
+    """Return whether a dot-named entry is hidden from listings and indexing.
+
+    ``uri`` is the entry itself or its parent directory; only its scope matters.
+    In ``viking://resources`` user content such as ``.gitlab-ci.yml`` or
+    ``.helm/`` is ordinary content, so only OpenViking metadata and storage-layer
+    internal files are hidden. Other scopes keep their own dot-file metadata
+    (``.meta.json``, ``.done``, ``.recall_log.json``, ...) and hide every
+    dot-name.
+    """
+    if not name.startswith("."):
+        return False
+    if _uri_scope(uri) not in _USER_DOTFILE_SCOPES:
+        return True
+    return name in RESOURCE_METADATA_FILENAMES or is_storage_internal_name(name)

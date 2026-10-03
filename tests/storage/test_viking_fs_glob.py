@@ -454,10 +454,11 @@ async def test_glob_remote_entry_mode_fills_missing_stat_fields(monkeypatch, fs)
 
 
 @pytest.mark.asyncio
-async def test_glob_remote_filters_hidden_files_but_keeps_hidden_dir_children(monkeypatch, fs):
+async def test_glob_remote_filters_metadata_files_but_keeps_user_dotfiles(monkeypatch, fs):
     vector_store = _RemoteGlobVectorStore(
         [
             {"uri": "viking://resources/.hidden.md", "level": 2, "name": ".hidden.md"},
+            {"uri": "viking://resources/docs/.overview.md", "level": 2, "name": ".overview.md"},
             {
                 "uri": "viking://resources/.hidden_dir/nested.md",
                 "level": 2,
@@ -472,8 +473,11 @@ async def test_glob_remote_filters_hidden_files_but_keeps_hidden_dir_children(mo
     result = await fs.glob("**/*.md", uri="viking://resources", node_limit=10, ctx=_default_ctx())
 
     assert result == {
-        "matches": ["viking://resources/.hidden_dir/nested.md"],
-        "count": 1,
+        "matches": [
+            "viking://resources/.hidden.md",
+            "viking://resources/.hidden_dir/nested.md",
+        ],
+        "count": 2,
     }
 
 
