@@ -472,3 +472,125 @@ def test_index_expectations_include_resource_dotfiles():
     candidates = _file_candidates("viking://resources/repo", entries)
 
     assert sorted(name for _, _, name in candidates) == [".gitlab-ci.yml", "app.py"]
+
+
+# ── vectorization paths ──
+
+
+class _VectorizeRecorder:
+    def __init__(self):
+        self.files = []
+
+    async def __call__(self, *, file_path, **_kwargs):
+        self.files.append(file_path)
+        return True
+
+
+class _VectorizeFS:
+    def __init__(self, entries):
+        self._entries = entries
+
+    async def exists(self, _uri, ctx=None):
+        return False
+
+    async def ls(self, _uri, node_limit=None, ctx=None):
+        return self._entries
+
+    async def tree(self, _uri, node_limit=None, level_limit=None, ctx=None):
+        return self._entries
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "root", ["viking://resources/repo", "viking://user/alice/peers/bot/resources/repo"]
+)
+async def test_index_resource_vectorizes_user_dotfiles(monkeypatch, root):
+    from openviking.utils import embedding_utils
+
+    recorder = _VectorizeRecorder()
+    entries = [_file("app.py"), _file(".gitlab-ci.yml"), _file(".abstract.md"), _dir(".helm")]
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: _VectorizeFS(entries))
+    monkeypatch.setattr(embedding_utils, "vectorize_file", recorder)
+
+    await embedding_utils.index_resource(root, ctx=_default_ctx())
+
+    assert sorted(recorder.files) == [f"{root}/.gitlab-ci.yml", f"{root}/app.py"]
+
+
+@pytest.mark.asyncio
+async def test_resource_processor_vectorizes_user_dotfiles(monkeypatch):
+    from types import SimpleNamespace
+
+    from openviking.utils import resource_processor
+    from openviking.utils.resource_processor import ResourceProcessor
+
+    root = "viking://user/alice/resources/repo"
+    recorder = _VectorizeRecorder()
+    entries = [
+        {"uri": f"{root}/{name}", "name": name, "isDir": False}
+        for name in ("app.py", ".gitlab-ci.yml", ".overview.md", ".path.ovlock")
+    ]
+    monkeypatch.setattr(resource_processor, "get_viking_fs", lambda: _VectorizeFS(entries))
+    monkeypatch.setattr(resource_processor, "vectorize_file", recorder)
+    monkeypatch.setattr(
+        resource_processor,
+        "get_openviking_config",
+        lambda: SimpleNamespace(
+            queue_workers=SimpleNamespace(
+                add_resource=SimpleNamespace(file_vectorization_concurrency=4)
+            )
+        ),
+    )
+
+    await ResourceProcessor.__new__(ResourceProcessor)._vectorize_resource_files(
+        root, ctx=_default_ctx()
+    )
+
+    assert sorted(recorder.files) == [f"{root}/.gitlab-ci.yml", f"{root}/app.py"]
+
+
+@pytest.mark.asyncio
+async def test_ovpack_import_vectorizes_user_dotfiles(monkeypatch):
+    from openviking.storage.ovpack import operations
+
+    root = "viking://resources/pack"
+    recorder = _VectorizeRecorder()
+
+    async def no_text(*_args, **_kwargs):
+        return ""
+
+    monkeypatch.setattr(operations, "vectorize_file", recorder)
+    monkeypatch.setattr(operations, "read_text_if_exists", no_text)
+    entries = [
+        {"uri": f"{root}/{name}", "name": name, "rel_path": name, "isDir": False}
+        for name in ("app.py", ".gitlab-ci.yml", ".abstract.md")
+    ]
+
+    await operations._enqueue_direct_vectorization(None, root, _default_ctx(), entries=entries)
+
+    assert sorted(recorder.files) == [f"{root}/.gitlab-ci.yml", f"{root}/app.py"]
+
+
+def test_semantic_artifact_dir_includes_user_dotfiles(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: _LsFS([])
+    )
+    executor = SemanticTreeExecutor(
+        processor=None,
+        context_type="resource",
+        max_concurrent_llm=1,
+        ctx=None,
+        artifact_files=[
+            "app.py",
+            ".gitlab-ci.yml",
+            ".artifact_manifest.json",
+            ".helm/values.yaml",
+            "docs/.image_mappings.json",
+        ],
+    )
+    executor._root_uri = "viking://resources/repo"
+
+    dirs, files = executor._list_artifact_dir("viking://resources/repo")
+
+    assert dirs == ["viking://resources/repo/.helm", "viking://resources/repo/docs"]
+    assert files == ["viking://resources/repo/.gitlab-ci.yml", "viking://resources/repo/app.py"]
